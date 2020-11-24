@@ -1,6 +1,7 @@
 import operator
 import pickle
 import threading
+import time
 
 import dask
 import dask.dataframe.methods
@@ -128,6 +129,7 @@ class ProxyObject:
     """
 
     __slots__ = [
+        "__weakref__",
         "_obj_pxy",  # A dict that holds the state of the proxy object
         "_obj_pxy_lock",  # Threading lock for all obj_pxy access
         "__obj_pxy_cache",  # A dict used for caching attributes
@@ -211,6 +213,7 @@ class ProxyObject:
                 header, frames = self._obj_pxy["obj"]
                 self._obj_pxy["obj"] = distributed.protocol.deserialize(header, frames)
                 self._obj_pxy["serializers"] = None
+            self._obj_pxy["last_access"] = time.time()
             return self._obj_pxy["obj"]
 
     def _obj_pxy_is_cuda_object(self):
