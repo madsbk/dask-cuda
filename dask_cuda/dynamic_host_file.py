@@ -1,5 +1,6 @@
 from collections import defaultdict
 import functools
+import threading
 import time
 import weakref
 import os
@@ -55,6 +56,7 @@ class DynamicHostFile(MutableMapping):
     ):
         self.device_memory_limit = device_memory_limit
         self.store = {}
+        self.lock = threading.RLock()
 
         # self.proxied_id_to_proxy = Dict[int, proxy_object.ProxyObject] = {}
         # self.proxy_id_to_proxy: Dict[int, proxy_object.ProxyObject] = {}
@@ -77,7 +79,6 @@ class DynamicHostFile(MutableMapping):
         assert len(ret) == len(set(id(p) for p in ret))  # No duplicates
         return ret
 
-    @property
     def proxied_id_to_proxy(self):
         ret = {}
         for p in self.unspilled_proxies():
@@ -87,16 +88,17 @@ class DynamicHostFile(MutableMapping):
         return ret
 
     def __setitem__(self, key, value):
-        found_proxies = []
-        self.store[key] = proxify_device_object(
-            value, self.proxied_id_to_proxy, found_proxies
-        )
-        last_access = time.time()
-        self_weakref = weakref.ref(self)
-        for p in found_proxies:
-            p._obj_pxy["hostfile"] = self_weakref
-            p._obj_pxy["last_access"] = last_access
-        self.maybe_evict()
+        with self.lock:
+            found_proxies = []
+            self.store[key] = proxify_device_object(
+                value, self.proxied_id_to_proxy(), found_proxies
+            )
+            last_access = time.time()
+            self_weakref = weakref.ref(self)
+            for p in found_proxies:
+                p._obj_pxy["hostfile"] = self_weakref
+                p._obj_pxy["last_access"] = last_access
+            self.maybe_evict()
 
     def __getitem__(self, key):
         return self.store[key]
@@ -108,26 +110,21 @@ class DynamicHostFile(MutableMapping):
         proxy._obj_pxy_serialize(serializers=["dask", "pickle"])
 
     def maybe_evict(self, extra_dev_mem=0):
-        in_dev_mem = []
-        for p in self.unspilled_proxies():
-            last_access = p._obj_pxy.get("last_access", 0)
-            size = sizeof(p._obj_pxy["obj"])
-            in_dev_mem.append((last_access, size, p))
-        total_dev_mem = 0
-        for _, size, _ in in_dev_mem:
-            total_dev_mem += size
-        total_dev_mem += extra_dev_mem
-        if total_dev_mem > self.device_memory_limit:
-            sorted(in_dev_mem, key=lambda x: (x[0], -x[1]))
-            for last_access, size, p in in_dev_mem:
-                self.evict(p)
-                total_dev_mem -= size
-                if total_dev_mem <= self.device_memory_limit:
-                    break
+        with self.lock:
+            in_dev_mem = []
+            total_dev_mem = 0
+            for p in self.unspilled_proxies():
+                last_access = p._obj_pxy.get("last_access", 0)
+                size = sizeof(p._obj_pxy["obj"])
+                in_dev_mem.append((last_access, size, p))
+                total_dev_mem += size
 
-    # def validate(self):
-    #     proxies_in_store = []
-    #     for value in self.store.values():
-    #         proxify_device_object(value, self.proxies, proxies_in_store)
+            total_dev_mem += extra_dev_mem
+            if total_dev_mem > self.device_memory_limit:
+                sorted(in_dev_mem, key=lambda x: (x[0], -x[1]))
+                for last_access, size, p in in_dev_mem:
+                    self.evict(p)
+                    total_dev_mem -= size
+                    if total_dev_mem <= self.device_memory_limit:
+                        break
 
-    #     assert [id(p) for p in proxies_in_store]
