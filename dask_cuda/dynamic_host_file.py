@@ -113,12 +113,9 @@ class DynamicHostFile(MutableMapping):
             last_access = p._obj_pxy.get("last_access", 0)
             size = sizeof(p._obj_pxy["obj"])
             in_dev_mem.append((last_access, size, p))
-        if len(in_dev_mem) > 1:
-            total_dev_mem = functools.reduce(lambda x, y: x[1] + y[1], in_dev_mem)
-        elif len(in_dev_mem) == 1:
-            total_dev_mem = in_dev_mem[0][1]
-        else:
-            total_dev_mem = 0
+        total_dev_mem = 0
+        for _, size, _ in in_dev_mem:
+            total_dev_mem += size
         total_dev_mem += extra_dev_mem
         if total_dev_mem > self.device_memory_limit:
             sorted(in_dev_mem, key=lambda x: (x[0], -x[1]))

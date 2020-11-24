@@ -197,7 +197,7 @@ pem_file_option_type = click.Path(exists=True, resolve_path=True)
     help="Enable just-in-time unspilling",
 )
 @click.option(
-    "--enable-dynamic-unspill/--disable-dynamic-unspill",
+    "--enable-dynamic-spill/--disable-dynamic-spill",
     default=None,  # If not specified, use Dask config
     help="Enable dynamic spilling",
 )
