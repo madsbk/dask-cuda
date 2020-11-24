@@ -1,5 +1,7 @@
 from collections import defaultdict
 import functools
+import time
+import weakref
 import os
 from typing import Any, Dict, MutableMapping
 from dask.sizeof import sizeof
@@ -52,7 +54,10 @@ class DynamicHostFile(MutableMapping):
     ):
         self.device_memory_limit = device_memory_limit
         self.store = {}
-        self.proxies: Dict[int, proxy_object.ProxyObject] = {}
+
+        # self.proxied_id_to_proxy = Dict[int, proxy_object.ProxyObject] = {}
+        # self.proxy_id_to_proxy: Dict[int, proxy_object.ProxyObject] = {}
+        # self.proxies: Dict[int, proxy_object.ProxyObject] = {}
 
     def __contains__(self, key):
         return key in self.store
@@ -63,9 +68,42 @@ class DynamicHostFile(MutableMapping):
     def __iter__(self):
         return iter(self.store)
 
+    # @property
+    # def proxies(self):
+    #     found_proxies = []
+    #     proxied_id_to_proxy = {}
+    #     proxify_device_object(self.store, proxied_id_to_proxy, found_proxies)
+    #     assert len(found_proxies) == len(set(id(p) for p in found_proxies))  # No duplicates
+    #     return found_proxies
+
+    def unspilled_proxies(self):
+        found_proxies = []
+        proxied_id_to_proxy = {}
+        proxify_device_object(self.store, proxied_id_to_proxy, found_proxies)
+        ret = proxied_id_to_proxy.values()
+        assert len(ret) == len(set(id(p) for p in ret))  # No duplicates
+        return ret
+
+    @property
+    def proxied_id_to_proxy(self):
+        ret = {}
+        for p in self.unspilled_proxies():
+            _id = id(p._obj_pxy["obj"])
+            assert _id not in ret
+            ret[_id] = p
+        return ret
+
     def __setitem__(self, key, value):
-        value = proxify_device_object(value, self)
-        self.store[key] = value
+        found_proxies = []
+        self.store[key] = proxify_device_object(
+            value, self.proxied_id_to_proxy, found_proxies
+        )
+        last_access = time.time()
+        self_weakref = weakref.ref(self)
+        for p in found_proxies:
+            p._obj_pxy["hostfile"] = self_weakref
+            p._obj_pxy["last_access"] = last_access
+        self.maybe_evict()
 
     def __getitem__(self, key):
         return self.store[key]
@@ -76,36 +114,30 @@ class DynamicHostFile(MutableMapping):
     def evict(self, proxy):
         proxy._obj_pxy_serialize(serializers=["dask", "pickle"])
 
-    def maybe_evict(self, ignore):
+    def maybe_evict(self, extra_dev_mem=0):
         in_dev_mem = []
-        for p in self.proxies.values():
-            if p._obj_pxy["serializers"] is None and p not in ignore:
-                last_time = p._obj_pxy.get("last_time", 0)
-                size = sizeof(p._obj_pxy["obj"])
-                in_dev_mem.append((last_time, size, p))
-
-        total_dev_mem = functools.reduce(lambda x: x[1], in_dev_mem)
+        for p in self.unspilled_proxies():
+            last_access = p._obj_pxy.get("last_access", 0)
+            size = sizeof(p._obj_pxy["obj"])
+            in_dev_mem.append((last_access, size, p))
+        if len(in_dev_mem) > 1:
+            total_dev_mem = functools.reduce(lambda x, y: x[1] + y[1], in_dev_mem)
+        elif len(in_dev_mem) == 1:
+            total_dev_mem = in_dev_mem[0][1]
+        else:
+            total_dev_mem = 0
+        total_dev_mem += extra_dev_mem
         if total_dev_mem > self.device_memory_limit:
             sorted(in_dev_mem, key=lambda x: (x[0], -x[1]))
-            print(f"maybe_evict() - total_dev_mem: {total_dev_mem}")
-            print("in_dev_mem: ", in_dev_mem)
-            for last_time, size, p in in_dev_mem:
-                print(f"evicting : ", (last_time, size, p))
+            for last_access, size, p in in_dev_mem:
                 self.evict(p)
                 total_dev_mem -= size
                 if total_dev_mem <= self.device_memory_limit:
                     break
 
-
-
-
-
-
-
-
-
-
     # def validate(self):
-    #     unique_proxies = set()
-    #     for p in self.proxies.values():
-    #         assert p.__
+    #     proxies_in_store = []
+    #     for value in self.store.values():
+    #         proxify_device_object(value, self.proxies, proxies_in_store)
+
+    #     assert [id(p) for p in proxies_in_store]

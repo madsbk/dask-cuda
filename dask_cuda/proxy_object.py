@@ -167,6 +167,9 @@ class ProxyObject:
         with self._obj_pxy_lock:
             return {k: self._obj_pxy[k] for k in self._obj_pxy.keys() if k != "obj"}
 
+    def _obj_pxy_serialized(self):
+        return self._obj_pxy["serializers"] is not None
+
     def _obj_pxy_serialize(self, serializers):
         """Inplace serialization of the proxied object using the `serializers`
 
@@ -210,9 +213,14 @@ class ProxyObject:
         """
         with self._obj_pxy_lock:
             if self._obj_pxy["serializers"] is not None:
+                hostfile = self._obj_pxy.get("hostfile", lambda: None)()
+                if hostfile is not None:
+                    hostfile.maybe_evict(self.__sizeof__())
+
                 header, frames = self._obj_pxy["obj"]
                 self._obj_pxy["obj"] = distributed.protocol.deserialize(header, frames)
                 self._obj_pxy["serializers"] = None
+
             self._obj_pxy["last_access"] = time.time()
             return self._obj_pxy["obj"]
 
@@ -246,9 +254,7 @@ class ProxyObject:
     def __repr__(self):
         with self._obj_pxy_lock:
             typename = self._obj_pxy["typename"]
-            ret = (
-                f"<{dask.utils.typename(type(self))} at {hex(id(self))} for {typename}"
-            )
+            ret = f"<{dask.utils.typename(type(self))} at {hex(id(self))} of {typename}"
             if self._obj_pxy["serializers"] is not None:
                 ret += f" (serialized={repr(self._obj_pxy['serializers'])})>"
             else:
