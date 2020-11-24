@@ -12,7 +12,9 @@ from distributed.protocol import (
     serialize_bytelist,
 )
 from distributed.protocol.pickle import HIGHEST_PROTOCOL
-
+from pandas.testing import assert_frame_equal
+from distributed import Client
+import dask_cuda
 from dask_cuda.dynamic_host_file import DynamicHostFile
 
 cupy = pytest.importorskip("cupy")
@@ -55,3 +57,31 @@ def test_one_item_limit():
     del dhf["k2"]
     assert not dhf["k3"][1]._obj_pxy_serialized()
 
+
+@pytest.mark.parametrize("dynamic_spill", [True, False])
+def test_local_cuda_cluster(dynamic_spill):
+    """Testing spilling of a proxied cudf dataframe in a local cuda cluster"""
+    cudf = pytest.importorskip("cudf")
+    dask_cudf = pytest.importorskip("dask_cudf")
+
+    def task(x):
+        assert isinstance(x, cudf.DataFrame)
+        if dynamic_spill:
+            # Check that `x` is a proxy object and the proxied DataFrame is serialized
+            assert type(x) is dask_cuda.proxy_object.ProxyObject
+            assert x._obj_pxy_get_meta()["serializers"] == ["dask", "pickle"]
+        else:
+            assert type(x) == cudf.DataFrame
+        assert len(x) == 10  # Trigger deserialization
+        return x
+
+    # Notice, setting `device_memory_limit=1B` to trigger spilling
+    with dask_cuda.LocalCUDACluster(
+        n_workers=1, device_memory_limit="1B", dynamic_spill=dynamic_spill
+    ) as cluster:
+        with Client(cluster):
+            df = cudf.DataFrame({"a": range(10)})
+            ddf = dask_cudf.from_cudf(df, npartitions=1)
+            ddf = ddf.map_partitions(task, meta=df.head())
+            got = ddf.compute()
+            assert_frame_equal(got.to_pandas(), df.to_pandas())

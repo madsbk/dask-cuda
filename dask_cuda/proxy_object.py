@@ -165,7 +165,11 @@ class ProxyObject:
         Dictionary of metadata
         """
         with self._obj_pxy_lock:
-            return {k: self._obj_pxy[k] for k in self._obj_pxy.keys() if k != "obj"}
+            return {
+                k: self._obj_pxy[k]
+                for k in self._obj_pxy.keys()
+                if k not in ["obj", "last_access", "hostfile"]
+            }
 
     def _obj_pxy_serialized(self):
         return self._obj_pxy["serializers"] is not None

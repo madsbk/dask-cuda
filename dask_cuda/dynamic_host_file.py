@@ -21,7 +21,7 @@ from distributed.protocol import (
 from distributed.utils import nbytes
 from distributed.worker import weight
 
-from . import proxy_object
+from . import proxy_object, device_host_file
 from .proxify_device_object import proxify_device_object
 from .utils import nvtx_annotate
 
@@ -51,6 +51,7 @@ class DynamicHostFile(MutableMapping):
     def __init__(
         self,
         device_memory_limit: int,
+        **kwargs,
     ):
         self.device_memory_limit = device_memory_limit
         self.store = {}
@@ -67,14 +68,6 @@ class DynamicHostFile(MutableMapping):
 
     def __iter__(self):
         return iter(self.store)
-
-    # @property
-    # def proxies(self):
-    #     found_proxies = []
-    #     proxied_id_to_proxy = {}
-    #     proxify_device_object(self.store, proxied_id_to_proxy, found_proxies)
-    #     assert len(found_proxies) == len(set(id(p) for p in found_proxies))  # No duplicates
-    #     return found_proxies
 
     def unspilled_proxies(self):
         found_proxies = []
