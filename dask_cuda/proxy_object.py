@@ -10,6 +10,7 @@ import distributed.utils
 from dask.sizeof import sizeof
 
 from .is_device_object import is_device_object
+from .get_device_memory_objects import get_device_memory_objects
 
 # List of attributes that should be copied to the proxy at creation, which makes
 # them accessible without deserialization of the proxied object
@@ -472,6 +473,14 @@ def obj_pxy_is_device_object(obj: ProxyObject):
     `hasattr(o, "__cuda_array_interface__")` check.
     """
     return obj._obj_pxy_is_cuda_object()
+
+
+@get_device_memory_objects.register(ProxyObject)
+def obj_pxy_get_device_memory_objects(obj: ProxyObject):
+    if obj._obj_pxy["serializers"] is None:
+        return get_device_memory_objects(obj)
+    else:
+        return []
 
 
 @distributed.protocol.dask_serialize.register(ProxyObject)

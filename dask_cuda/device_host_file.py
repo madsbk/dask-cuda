@@ -19,10 +19,11 @@ from distributed.worker import weight
 from . import proxy_object
 from .is_device_object import is_device_object
 from .utils import nvtx_annotate
+from .get_device_memory_objects import get_device_memory_objects
 
 
 class DeviceSerialized:
-    """ Store device object on the host
+    """Store device object on the host
     This stores a device-side object as
     1.  A msgpack encodable header
     2.  A list of `bytes`-like objects (like NumPy arrays)
@@ -87,7 +88,7 @@ def pxy_obj_host_to_device(s: proxy_object.ProxyObject) -> object:
 
 
 class DeviceHostFile(ZictBase):
-    """ Manages serialization/deserialization of objects.
+    """Manages serialization/deserialization of objects.
 
     Three LRU cache levels are controlled, for device, host and disk.
     Each level takes care of serializing objects once its limit has been
@@ -154,22 +155,28 @@ class DeviceHostFile(ZictBase):
         )
 
         self.device = self.device_buffer.fast.d
+        assert self.device is self.device_func
         self.host = self.host_buffer if memory_limit == 0 else self.host_buffer.fast.d
         self.disk = None if memory_limit == 0 else self.host_buffer.slow.d
 
         # For Worker compatibility only, where `fast` is host memory buffer
         self.fast = self.host_buffer if memory_limit == 0 else self.host_buffer.fast
 
+        self.device_memory_limit = device_memory_limit
+
     def __setitem__(self, key, value):
         if is_device_object(value):
             self.device_keys.add(key)
             self.device_buffer[key] = value
+            self.evict_accurate()
         else:
             self.host_buffer[key] = value
 
     def __getitem__(self, key):
         if key in self.device_keys:
-            return self.device_buffer[key]
+            ret = self.device_buffer[key]
+            self.evict_accurate()
+            return ret
         elif key in self.host_buffer:
             return self.host_buffer[key]
         else:
@@ -184,3 +191,18 @@ class DeviceHostFile(ZictBase):
     def __delitem__(self, key):
         self.device_keys.discard(key)
         del self.device_buffer[key]
+
+    def dev_mem_usage(self):
+        ret = 0
+        dev_ids = set()
+        for p in self.unspilled_proxies():
+            for m in get_device_memory_objects(p._obj_pxy["obj"]):
+                i = id(m)
+                if i not in dev_ids:
+                    ret += dask.sizeof.sizeof(m)
+                    dev_ids.add(i)
+        return ret
+
+    def evict_accurate(self):
+        while self.dev_mem_usage() > self.device_memory_limit:
+            self.device_buffer.fast.evict()
