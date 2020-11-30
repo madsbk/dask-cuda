@@ -79,6 +79,8 @@ class CUDAWorker:
         # Required by RAPIDS libraries (e.g., cuDF) to ensure no context
         # initialization happens before we can set CUDA_VISIBLE_DEVICES
         os.environ["RAPIDS_NO_INITIALIZE"] = "True"
+        import cupy
+        cupy.cuda.set_allocator(None)
 
         enable_proctitle_on_current()
         enable_proctitle_on_children()

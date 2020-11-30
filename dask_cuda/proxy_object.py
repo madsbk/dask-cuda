@@ -2,6 +2,7 @@ import operator
 import pickle
 import threading
 import time
+import weakref
 
 import dask
 import dask.dataframe.methods
@@ -15,6 +16,48 @@ from .is_device_object import is_device_object
 # List of attributes that should be copied to the proxy at creation, which makes
 # them accessible without deserialization of the proxied object
 _FIXED_ATTRS = ["name"]
+
+
+import os
+
+
+def dev_id():
+    return int(os.environ["CUDA_VISIBLE_DEVICES"].split(",", 1)[0])
+
+
+def dev_used_mem():
+    i = dev_id()
+    import pynvml
+    pynvml.nvmlInit()
+
+    h = pynvml.nvmlDeviceGetHandleByIndex(i)
+    info = pynvml.nvmlDeviceGetMemoryInfo(h)
+    used = info.used
+    return used/1024/1024/1024
+
+def get_owners(obj):
+    ret = []
+    if hasattr(obj, "columns"):
+        for col_name in obj.columns:
+            ret += get_owners(obj[col_name])
+    elif hasattr(obj, "data"):
+        ret += get_owners(obj.data)
+    elif hasattr(obj, "_owner") and obj._owner is not None:
+        ret += get_owners(obj._owner)
+    elif hasattr(obj, "__cuda_array_interface__"):
+        from rmm._lib.device_buffer import DeviceBuffer
+        assert type(obj) is DeviceBuffer
+        ret.append(obj)
+    else:
+        print("get_owners-OTHER: ", type(obj))
+        ret.append(obj)
+    return ret
+
+
+class Wrap:
+    def __init__(self, obj) -> None:
+        self.obj = obj
+
 
 
 def asproxy(obj, serializers=None, subclass=None):
@@ -57,6 +100,7 @@ def asproxy(obj, serializers=None, subclass=None):
             subclass=pickle.dumps(subclass) if subclass else None,
             serializers=None,
         )
+    assert serializers is None
     if serializers is not None:
         ret._obj_pxy_serialize(serializers=serializers)
     return ret
@@ -82,6 +126,8 @@ def unproxy(obj):
         pass
     return obj
 
+
+import time
 
 class ProxyObject:
     """Object wrapper/proxy for serializable objects
@@ -174,7 +220,7 @@ class ProxyObject:
     def _obj_pxy_serialized(self):
         return self._obj_pxy["serializers"] is not None
 
-    def _obj_pxy_serialize(self, serializers):
+    def _obj_pxy_serialize(self, serializers, check_leak=False):
         """Inplace serialization of the proxied object using the `serializers`
 
         Parameters
@@ -200,14 +246,83 @@ class ProxyObject:
                 self._obj_pxy_deserialize()
 
             if self._obj_pxy["serializers"] is None:
+                import cudf
+                import gc
+                import weakref
+                import sys
+                obj = self._obj_pxy["obj"]
+                obj_ref = weakref.ref(obj)
+                data_list = []
+                # if hasattr(obj, "columns"):
+                #     for col_name in obj.columns:
+                #         data_list.append(obj[col_name].data)
+                #         if obj[col_name].data._owner is None:
+                #             data_list.append(obj[col_name].data)
+                #         else:
+                #             data_list.append(obj[col_name].data._owner)
+                # elif hasattr(obj, "data"):
+                #     if obj.data._owner is None:
+                #         data_list.append(obj.data)
+                #     else:
+                #         data_list.append(obj.data._owner)
+                # else:
+                #     print("OTHER: ", type(obj))
+                #data_refs = [weakref.ref(d) for d in data_list]
+                #assert all([sys.getrefcount(d) == 4 for d in data_list])
+                if check_leak:
+                    #data_refs = [weakref.ref(d) for d in get_owners(obj)]
+                    gc.collect()
+                    data_refs = [sys.getrefcount(d) for d in get_owners(obj)]
+                    if any([d > 4 for d in data_refs]):
+                        print("data_refs: ", data_refs)
+                        #print(gc.get_referrers(get_owners(obj)[0]))
+                del obj
+                del data_list
+
+                # gc.collect()
+                # mem_before = dev_used_mem()
                 self._obj_pxy["obj"] = distributed.protocol.serialize(
                     self._obj_pxy["obj"], serializers
                 )
+                # gc.collect()
+                # time.sleep(0.1)
+                # mem_after = dev_used_mem()
                 self._obj_pxy["serializers"] = serializers
+                # if check_leak:
+                #     gc.collect()
+                #     if obj_ref() is not None:
+                #         print("LEAK-obj: ", type(obj_ref()))
+
+                #     if any([d() is not None for d in data_refs]):
+                #         leaked = []
+                #         for d in data_refs:
+                #             if d() is not None:
+                #                 d = d()
+                #                 leaked.append(type(d))
+                #         print("LEAK-data: ", leaked)
+
+
+
+
+                # if check_leak:
+                #     # if mem_before <= mem_after and 10*2*30:
+                #     #     print("_obj_pxy_serialize() - evicting: %.4f => %.4f GB" % (mem_before, mem_after))
+                #     if obj_ref() is not None:
+                #         import cudf
+                #         # import traceback
+                #         # traceback.print_stack()
+                #         refs = []
+                #         for o in gc.get_referrers(obj_ref())[0]:
+                #             if isinstance(o, cudf.DataFrame):
+                #                 refs.append("%s at %s"%(type(o), hex(id(o))))
+                #             else:
+                #                 refs.append(repr(o))
+                #         msg = "_obj_pxy_serialize2: ", refs
+                #         assert False, msg
 
             return self._obj_pxy["obj"]
 
-    def _obj_pxy_deserialize(self):
+    def _obj_pxy_deserialize(self, extra_dev_mem=0, ignores=()):
         """Inplace deserialization of the proxied object
 
         Returns
@@ -219,7 +334,7 @@ class ProxyObject:
             if self._obj_pxy["serializers"] is not None:
                 hostfile = self._obj_pxy.get("hostfile", lambda: None)()
                 if hostfile is not None:
-                    hostfile.maybe_evict(self.__sizeof__())
+                    hostfile.maybe_evict(self.__sizeof__() + extra_dev_mem, ignores=ignores)
 
                 header, frames = self._obj_pxy["obj"]
                 self._obj_pxy["obj"] = distributed.protocol.deserialize(header, frames)
@@ -527,10 +642,12 @@ def obj_pxy_dask_deserialize(header, frames):
         subclass = ProxyObject
     else:
         subclass = pickle.loads(meta["subclass"])
-    return subclass(
+    ret =  subclass(
         obj=(header["proxied-header"], frames),
         **header["obj-pxy-meta"],
     )
+    #print(f"obj_pxy_dask_deserialize() - ret: {hex(id(ret))}")
+    return ret
 
 
 @dask.dataframe.utils.hash_object_dispatch.register(ProxyObject)
@@ -538,11 +655,56 @@ def obj_pxy_hash_object(obj: ProxyObject, index=True):
     return dask.dataframe.utils.hash_object_dispatch(obj._obj_pxy_deserialize(), index)
 
 
+
 @dask.dataframe.utils.group_split_dispatch.register(ProxyObject)
 def obj_pxy_group_split(obj: ProxyObject, c, k, ignore_index=False):
-    return dask.dataframe.utils.group_split_dispatch(
+    hostfile = obj._obj_pxy.get("hostfile")
+    assert hostfile() is not None
+    obj._obj_pxy_deserialize()
+    import gc
+    import time
+    mem_before=dev_used_mem()
+    evicted = []
+    mem_list = []
+    while True:
+        m1 = dev_used_mem()
+        if m1 < 25:
+            break
+        evicted.append(hostfile().evict_oldest())
+        gc.collect()
+        time.sleep(0.01)
+        m2 = dev_used_mem()
+        mem_list.append(m1-m2)
+
+    # if len(evicted) > 10:
+    #     df = evicted[-1]
+    #     columns = evicted[-1].columns
+    #     for col in columns:
+
+    #     print("evicting obj: ", repr(evicted[-1]), str(evicted[-1]))
+
+
+    sizes = [sizeof(e)/1024/1024/1024 for e in evicted]
+    sizes_str = ["%.3f" % s for s in sizes]
+    evicted_str = ["(%.4f GB, %.4f GB)" % (s, m) for s,m in zip(sizes, mem_list)]
+
+    print("obj_pxy_group_split() - evicting %d (%.4f GB): %.4f => %.4f GB, sizes: %s" % (len(evicted), sum(sizes), mem_before, dev_used_mem(), evicted_str))
+    # if used > 25:
+    #     hostfile().maybe_evict(sizeof(obj)*1000)
+    ret = dask.dataframe.utils.group_split_dispatch(
         obj._obj_pxy_deserialize(), c, k, ignore_index
     )
+    #print("obj_pxy_group_split() - ret: %.4f GB, len(): %d" % (sizeof(ret)/1024/1024/1024, len(ret)))
+    ret2 = {}
+    import time
+    last_access = time.time()
+    for k,v in ret.items():
+        ret2[k] = asproxy(v)
+        ret2[k]._obj_pxy["hostfile"] = hostfile
+        ret2[k]._obj_pxy["last_access"] = last_access
+    hostfile().maybe_evict()
+
+    return ret2
 
 
 @dask.dataframe.utils.make_scalar.register(ProxyObject)
@@ -550,12 +712,53 @@ def obj_pxy_make_scalar(obj: ProxyObject):
     return dask.dataframe.utils.make_scalar(obj._obj_pxy_deserialize())
 
 
+# @dask.dataframe.methods.concat_dispatch.register(ProxyObject)
+# def obj_pxy_concat(objs, *args, **kwargs):
+#     print("obj_pxy_concat() - ", [type(o) for o in objs])
+#     # Deserialize concat inputs (in-place)
+#     total_mem = 0
+#     hostfile = None
+#     ignores = [o for o in objs if type(o) is ProxyObject]
+#     for i in range(len(objs)):
+#         try:
+#             hostfile = objs[i]._obj_pxy.get("hostfile", None) if hostfile is not None else hostfile
+#             objs[i] = objs[i]._obj_pxy_deserialize(ignores=ignores)
+#         except AttributeError:
+#             pass
+#         total_mem += sizeof(objs[i])
+
+#     if hostfile is not None:
+#         hostfile = hostfile()
+#         #if hostfile is not None:
+#         hostfile.maybe_evict(extra_dev_mem=total_mem, ignores=ignores)
+#         print("obj_pxy_concat() - total_mem:  %.4f GB" % (total_mem/1024/1024/1024))
+
+
+#     return asproxy(dask.dataframe.methods.concat(objs, *args, **kwargs))
+
+
 @dask.dataframe.methods.concat_dispatch.register(ProxyObject)
 def obj_pxy_concat(objs, *args, **kwargs):
+    ignores = [o for o in objs if type(o) is ProxyObject]
+    total_mem = 0
+    for o in objs:
+        total_mem += sizeof(o)
+    #print("obj_pxy_concat() - total_mem: %.4f GB" % (total_mem/1024/1024/1024))
+    hostfile = objs[0]._obj_pxy.get("hostfile")()
+    #hostfile.evict_all(ignores=ignores)
+
     # Deserialize concat inputs (in-place)
     for i in range(len(objs)):
         try:
-            objs[i] = objs[i]._obj_pxy_deserialize()
+            objs[i] = objs[i]._obj_pxy_deserialize(ignores=ignores)
         except AttributeError:
             pass
-    return dask.dataframe.methods.concat(objs, *args, **kwargs)
+        total_mem += sizeof(objs[i])
+
+
+    ret = asproxy(dask.dataframe.methods.concat(objs, *args, **kwargs))
+    ret._obj_pxy["hostfile"] = weakref.ref(hostfile)
+    import time
+    ret._obj_pxy["last_access"] = time.time()
+    return ret
+    #return dask.dataframe.methods.concat(objs, *args, **kwargs)
