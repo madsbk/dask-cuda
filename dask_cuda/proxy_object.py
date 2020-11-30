@@ -666,15 +666,20 @@ def obj_pxy_group_split(obj: ProxyObject, c, k, ignore_index=False):
     mem_before=dev_used_mem()
     evicted = []
     mem_list = []
+
+
     while True:
-        m1 = dev_used_mem()
-        if m1 < 25:
+        mm1 = dev_used_mem()
+        m1 = hostfile().dev_mem_usage()/1024/1024/1024
+        print("%.4f GB" % m1)
+        if m1 < 14:
             break
         evicted.append(hostfile().evict_oldest())
         gc.collect()
         time.sleep(0.01)
-        m2 = dev_used_mem()
-        mem_list.append(m1-m2)
+        mm2 = dev_used_mem()
+        m2 = hostfile().dev_mem_usage()/1024/1024/1024
+        mem_list.append(mm1-mm2)
 
     # if len(evicted) > 10:
     #     df = evicted[-1]

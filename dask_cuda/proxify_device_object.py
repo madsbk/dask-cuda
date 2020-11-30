@@ -19,12 +19,12 @@ def proxify(obj, proxied_id_to_proxy, found_proxies, bases):
     found_proxies.append(ret)
 
 
-    from .proxy_object import get_owners
-    for o in get_owners(obj):
-        assert o not in bases
+    # from .proxy_object import get_owners
+    # for o in get_owners(obj):
+    #     assert o not in bases
 
-    for o in get_owners(obj):
-        bases.add(o)
+    # for o in get_owners(obj):
+    #     bases.add(o)
 
     return ret
 
@@ -48,12 +48,12 @@ def proxify_device_object_proxy_object(obj, proxied_id_to_proxy, found_proxies, 
         else:
             proxied_id_to_proxy[ptr] = obj
 
-        from .proxy_object import get_owners
-        for o in get_owners(obj):
-            assert o not in bases
+        # from .proxy_object import get_owners
+        # for o in get_owners(obj):
+        #     assert o not in bases
 
-        for o in get_owners(obj):
-            bases.add(o)
+        # for o in get_owners(obj):
+        #     bases.add(o)
 
     found_proxies.append(obj)
     return obj
@@ -71,6 +71,8 @@ def proxify_device_object_python_collection(seq, proxied_id_to_proxy, found_prox
 
 @proxify_device_object.register(dict)
 def proxify_device_object_python_dict(seq, proxied_id_to_proxy, found_proxies, bases):
+    for k,v in seq.items():
+        assert v is not seq
     return {
         k: proxify_device_object(v, proxied_id_to_proxy, found_proxies, bases)
         for k, v in seq.items()

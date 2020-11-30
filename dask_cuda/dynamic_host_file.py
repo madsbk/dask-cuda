@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from numba.core.types.containers import BaseTuple
-from dask_cuda.proxy_object import unproxy
+from dask_cuda.proxy_object import dev_id, unproxy
 import functools
 import threading
 import time
@@ -27,6 +27,7 @@ from distributed.worker import weight
 
 from . import proxy_object, device_host_file
 from .proxify_device_object import proxify_device_object
+from .is_device_object import is_device_object
 from .utils import nvtx_annotate
 
 
@@ -111,9 +112,21 @@ class DynamicHostFile(MutableMapping):
         proxied_id_to_proxy = {}
         bases = set()
         proxify_device_object(self.store, proxied_id_to_proxy, found_proxies, bases)
-        ret = proxied_id_to_proxy.values()
+        ret = list(proxied_id_to_proxy.values())
         assert len(ret) == len(set(id(p) for p in ret))  # No duplicates
         return ret
+
+    def dev_mem_usage(self):
+        from .get_device_memory_objects import get_device_memory_objects
+        with self.lock:
+            ret = 0
+            dev_ids = set()
+            for p in self.unspilled_proxies():
+                for m in get_device_memory_objects(p._obj_pxy["obj"]):
+                    if id(m) not in dev_ids:
+                        ret += sizeof(m)
+                        dev_ids.add(id(m))
+            return ret
 
     def proxied_id_to_proxy(self):
         ret = {}
@@ -124,6 +137,7 @@ class DynamicHostFile(MutableMapping):
         return ret
 
     def __setitem__(self, key, value):
+        from .get_device_memory_objects import get_device_memory_objects
         self.check_alias()
         with self.lock:
             found_proxies = []
@@ -136,6 +150,21 @@ class DynamicHostFile(MutableMapping):
             for p in found_proxies:
                 p._obj_pxy["hostfile"] = self_weakref
                 p._obj_pxy["last_access"] = last_access
+
+            dev_objs = []
+            for p in self.unspilled_proxies():
+                dev_objs.extend(get_device_memory_objects(p._obj_pxy["obj"]))
+
+            if len(dev_objs) != len(set(dev_objs)):
+                msg = f"\nkey: {key}\n"
+
+                from pprint import pprint
+                print(dev_objs)
+                pprint(value)
+
+
+
+            assert len(dev_objs) == len(set(dev_objs)), key
             self.maybe_evict()
 
     def __getitem__(self, key):
@@ -157,6 +186,7 @@ class DynamicHostFile(MutableMapping):
                 self.evict(p)
 
     def check_alias(self):
+        return
         import cudf
         bases = set()
         for p in self.unspilled_proxies():
@@ -170,19 +200,19 @@ class DynamicHostFile(MutableMapping):
                     assert i not in bases
                     bases.add(i)
 
-        # bases = set()
-        # bases_obj = set()
-        # from .proxy_object import get_owners
-        # from rmm._lib.device_buffer import DeviceBuffer
-        # for p in self.unspilled_proxies():
-        #     for o in get_owners(p._obj_pxy['obj']):
-        #         i = (o)
-        #         if i in bases:
-        #             print(f"check_alias() - o: {repr(o)}, bases: {bases_obj}")
-        #             assert False
-        #         #assert i not in bases, repr(o)
-        #         bases.add(i)
-        #         bases_obj.add(o)
+        bases = set()
+        bases_obj = set()
+        from .proxy_object import get_owners
+        from rmm._lib.device_buffer import DeviceBuffer
+        for p in self.unspilled_proxies():
+            for o in get_owners(p._obj_pxy['obj']):
+                i = (o)
+                if i in bases:
+                    print(f"check_alias() - o: {repr(o)}, bases: {bases_obj}")
+                    assert False
+                #assert i not in bases, repr(o)
+                bases.add(i)
+                bases_obj.add(o)
 
 
 
@@ -225,4 +255,8 @@ class DynamicHostFile(MutableMapping):
                         break
             if total_dev_mem > self.device_memory_limit:
                 print("Warning maybe_evict() - total_dev_mem: %.4f GB, device_memory_limit: %.4f GB" % (total_dev_mem/1024/1024/1024, self.device_memory_limit/1024/1024/1024))
+
+
+    #def maybe_evict_correct(self, extra_dev_mem=0, ignores=()):
+
 
