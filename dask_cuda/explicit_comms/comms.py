@@ -4,7 +4,7 @@ import time
 import uuid
 
 import distributed.comm
-from distributed import default_client, get_worker
+from distributed import default_client, get_worker, wait
 from distributed.comm.addressing import parse_address, parse_host_port, unparse_address
 
 from . import utils
@@ -80,7 +80,7 @@ async def _create_endpoints(session_state, peers):
     myrank = session_state["rank"]
     peers = list(enumerate(peers))
 
-    # Create endpoints to workers with a greater rank the my rank
+    # Create endpoints to workers with a greater rank than my rank
     for rank, address in peers[myrank + 1 :]:
         ep = await distributed.comm.connect(address)
         await ep.write(session_state["rank"])
@@ -195,7 +195,7 @@ class CommsContext:
         Parameters
         ----------
         coroutine: coroutine
-            The function to run on each worker
+            The function to run on each worker.
         df_list: list of Dask.dataframe.Dataframe
             Input dataframes
         extra_args: tuple
@@ -233,4 +233,5 @@ class CommsContext:
                 ret.append(
                     self.submit(worker, coroutine, world, dfs_nparts, dfs, *extra_args)
                 )
+        wait(ret)
         return utils.dataframes_to_dask_dataframe(ret)
