@@ -1,5 +1,7 @@
 import asyncio
 
+from dask.dataframe.core import split_evenly
+
 from . import comms
 from .dataframe_shuffle import (
     df_concat,
@@ -47,7 +49,7 @@ async def single_partition_join(
     return left_table.merge(right_table, left_on=left_on, right_on=right_on)
 
 
-async def _dataframe_merge(s, workers, dfs_nparts, dfs_parts, left_on, right_on):
+async def _dataframe_merge(s, workers, npartitions, dfs_nparts, dfs_parts, left_on, right_on):
     """Worker job that merge local DataFrames
 
     Parameters
@@ -89,9 +91,9 @@ async def _dataframe_merge(s, workers, dfs_nparts, dfs_parts, left_on, right_on)
     df2 = df_concat(dfs_parts[1])
 
     if len(dfs_nparts[0]) == 1 and len(dfs_nparts[1]) == 1:
-        return df1.merge(df2, left_on=left_on, right_on=right_on)
+        ret = df1.merge(df2, left_on=left_on, right_on=right_on)
     elif len(dfs_nparts[0]) == 1:
-        return await single_partition_join(
+        ret = await single_partition_join(
             len(workers),
             rank,
             eps,
@@ -105,7 +107,7 @@ async def _dataframe_merge(s, workers, dfs_nparts, dfs_parts, left_on, right_on)
             ],  # Extracting the only key in `dfs_nparts[0]`
         )
     elif len(dfs_nparts[1]) == 1:
-        return await single_partition_join(
+        ret = await single_partition_join(
             len(workers),
             rank,
             eps,
@@ -119,7 +121,12 @@ async def _dataframe_merge(s, workers, dfs_nparts, dfs_parts, left_on, right_on)
             ],  # Extracting the only key in `dfs_nparts[1]`
         )
     else:
-        return await hash_join(len(workers), rank, eps, df1, df2, left_on, right_on)
+        ret = await hash_join(len(workers), rank, eps, df1, df2, left_on, right_on)
+
+    if npartitions > 1:
+        ret = list(split_evenly(ret, npartitions).values())
+
+    return ret
 
 
 def dataframe_merge(left, right, on=None, left_on=None, right_on=None):

@@ -97,7 +97,8 @@ def _test_dataframe_merge(backend, protocol, n_workers):
 
 # @pytest.mark.xfail(reason="https://github.com/rapidsai/dask-cuda/issues/431")
 @pytest.mark.parametrize("nworkers", [1, 2, 4])
-@pytest.mark.parametrize("backend", ["pandas", "cudf"])
+#@pytest.mark.parametrize("backend", ["pandas", "cudf"])
+@pytest.mark.parametrize("backend", ["pandas"])
 @pytest.mark.parametrize("protocol", ["tcp", "ucx"])
 def test_dataframe_merge(backend, protocol, nworkers):
     if backend == "cudf":
@@ -180,7 +181,8 @@ def _test_dataframe_shuffle(backend, protocol, n_workers):
 
 # @pytest.mark.xfail(reason="https://github.com/rapidsai/dask-cuda/issues/431")
 @pytest.mark.parametrize("nworkers", [1, 2, 4])
-@pytest.mark.parametrize("backend", ["pandas", "cudf"])
+#@pytest.mark.parametrize("backend", ["pandas", "cudf"])
+@pytest.mark.parametrize("backend", ["pandas"])
 @pytest.mark.parametrize("protocol", ["tcp", "ucx"])
 def test_dataframe_shuffle(backend, protocol, nworkers):
     if backend == "cudf":

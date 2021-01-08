@@ -1,7 +1,7 @@
 import asyncio
 from typing import List
 
-from dask.dataframe.core import DataFrame, _concat
+from dask.dataframe.core import DataFrame, _concat, split_evenly
 from dask.dataframe.shuffle import partitioning_index, shuffle_group
 from distributed.protocol import to_serialize
 
@@ -48,6 +48,7 @@ async def exchange_and_concat_bins(rank, eps, bins):
     ret = [bins[rank]]
     await asyncio.gather(recv_bins(eps, ret), send_bins(eps, bins))
     return _concat([df for df in ret if df is not None])
+    #return [df for df in ret if df is not None]
 
 
 def df_concat(df_parts):
@@ -100,13 +101,7 @@ def partition_by_hash(df, columns, n_chunks, ignore_index=False):
         del df["_partitions"]
     return ret
 
-
-async def shuffle(n_chunks, rank, eps, left_table, column):
-    left_bins = partition_by_hash(left_table, column, n_chunks, ignore_index=True)
-    return await exchange_and_concat_bins(rank, eps, left_bins)
-
-
-async def _shuffle(s, workers, dfs_nparts, dfs_parts, column):
+async def _shuffle(s, workers, npartitions, dfs_nparts, dfs_parts, column):
     """
     Parameters
     ----------
@@ -139,10 +134,15 @@ async def _shuffle(s, workers, dfs_nparts, dfs_parts, column):
 
     df = df_concat(df_parts)
 
-    return await shuffle(len(workers), rank, eps, df, column)
+    left_bins = partition_by_hash(df, column, len(workers), ignore_index=True)
+    ret = await exchange_and_concat_bins(rank, eps, left_bins)
+    if npartitions > 1:
+        ret = list(split_evenly(ret, npartitions).values())
+    return ret
 
 
-def dataframe_shuffle(df: DataFrame, column_names: List[str]) -> DataFrame:
+
+def dataframe_shuffle(df: DataFrame, column_names: List[str], npartitions_per_worker=1) -> DataFrame:
     """Order divisions of DataFrame so that all values within column(s) align
 
     This enacts a task-based shuffle using explicit-comms. It requires a full
@@ -173,5 +173,5 @@ def dataframe_shuffle(df: DataFrame, column_names: List[str]) -> DataFrame:
     """
 
     return comms.default_comms().dataframe_operation(
-        _shuffle, df_list=(df,), extra_args=(column_names,),
+        _shuffle, df_list=(df,), extra_args=(column_names,), npartitions_per_worker=npartitions_per_worker,
     )

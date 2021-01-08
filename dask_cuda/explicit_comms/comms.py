@@ -1,11 +1,19 @@
 import asyncio
 import concurrent.futures
+from operator import getitem
 import time
 import uuid
+from dask.base import tokenize
+from dask.delayed import delayed
+
+from dask.highlevelgraph import HighLevelGraph
+from dask.dataframe.core import new_dd_object
+import dask.dataframe
 
 import distributed.comm
 from distributed import default_client, get_worker, wait
 from distributed.comm.addressing import parse_address, parse_host_port, unparse_address
+from distributed.client import Client
 
 from . import utils
 
@@ -102,7 +110,7 @@ class CommsContext:
     """Communication handler for explicit communication"""
 
     def __init__(self, client=None):
-        self.client = client if client is not None else default_client()
+        self.client : Client = client if client is not None else default_client()
         self.sessionId = uuid.uuid4().bytes
 
         # Get address of all workers (not Nanny addresses)
@@ -189,7 +197,7 @@ class CommsContext:
             )
         return self.client.gather(ret)
 
-    def dataframe_operation(self, coroutine, df_list, extra_args=tuple()):
+    def dataframe_operation(self, coroutine, df_list, extra_args=(), npartitions_per_worker=1):
         """Submit an operation on a list of Dask dataframe
 
         Parameters
@@ -200,6 +208,7 @@ class CommsContext:
             Input dataframes
         extra_args: tuple
             Extra function input
+
         Returns
         -------
         dataframe: Dask.dataframe.Dataframe
@@ -224,14 +233,24 @@ class CommsContext:
 
         # Submit `coroutine` on each worker given the df_parts that
         # belong the specific worker as input
-        ret = []
+        result_futures = []
         for rank, worker in enumerate(self.worker_addresses):
             if rank in world:
                 dfs = []
                 for df_parts in df_parts_list:
                     dfs.append(df_parts.get(worker, []))
-                ret.append(
-                    self.submit(worker, coroutine, world, dfs_nparts, dfs, *extra_args)
+                result_futures.append(
+                    self.submit(worker, coroutine, world, npartitions_per_worker, dfs_nparts, dfs, *extra_args)
                 )
+        wait(result_futures)
+
+        if npartitions_per_worker > 1:
+            ret = []
+            for f in result_futures:
+                for i in range(npartitions_per_worker):
+                    ret.append(delayed(getitem)(f, 0))
+        else:
+            ret = result_futures
+        ret = dask.dataframe.from_delayed(ret).persist()
         wait(ret)
-        return utils.dataframes_to_dask_dataframe(ret)
+        return ret
