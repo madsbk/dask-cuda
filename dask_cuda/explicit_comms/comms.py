@@ -20,7 +20,7 @@ from . import utils
 _default_comms = None
 
 
-def default_comms(client=None):
+def default_comms(client=None) -> "CommsContext":
     """ Return a comms instance if one has been initialized.
         Otherwise, initialize a new comms instance.
     """
