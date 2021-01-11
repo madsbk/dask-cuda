@@ -142,7 +142,7 @@ async def _shuffle(s, workers, npartitions, dfs_nparts, dfs_parts, column):
 
 
 
-def dataframe_shuffle(df: DataFrame, column_names: List[str], npartitions_per_worker=1) -> DataFrame:
+def dataframe_shuffle(df: DataFrame, column_names: List[str]) -> DataFrame:
     """Order divisions of DataFrame so that all values within column(s) align
 
     This enacts a task-based shuffle using explicit-comms. It requires a full
@@ -173,5 +173,5 @@ def dataframe_shuffle(df: DataFrame, column_names: List[str], npartitions_per_wo
     """
 
     return comms.default_comms().dataframe_operation(
-        _shuffle, df_list=(df,), extra_args=(column_names,), npartitions_per_worker=npartitions_per_worker,
+        _shuffle, df_list=(df,), extra_args=(column_names,),
     )

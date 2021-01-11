@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import functools
 from operator import getitem
 import time
 import uuid
@@ -197,7 +198,7 @@ class CommsContext:
             )
         return self.client.gather(ret)
 
-    def dataframe_operation(self, coroutine, df_list, extra_args=(), npartitions_per_worker=1):
+    def dataframe_operation(self, coroutine, df_list, extra_args=(), npartitions=None):
         """Submit an operation on a list of Dask dataframe
 
         Parameters
@@ -231,6 +232,11 @@ class CommsContext:
                     world.add(rank)
             dfs_nparts.append(nparts)
 
+        if npartitions is None:
+            npartitions = functools.reduce(max, [df.npartitions for df in df_list])
+
+        npartitions_per_worker = npartitions // len(world)
+
         # Submit `coroutine` on each worker given the df_parts that
         # belong the specific worker as input
         result_futures = []
@@ -248,7 +254,7 @@ class CommsContext:
             ret = []
             for f in result_futures:
                 for i in range(npartitions_per_worker):
-                    ret.append(delayed(getitem)(f, 0))
+                    ret.append(delayed(getitem)(f, i))
         else:
             ret = result_futures
         ret = dask.dataframe.from_delayed(ret).persist()

@@ -129,7 +129,7 @@ async def _dataframe_merge(s, workers, npartitions, dfs_nparts, dfs_parts, left_
     return ret
 
 
-def dataframe_merge(left, right, on=None, left_on=None, right_on=None, preserve_npartitions=True):
+def dataframe_merge(left, right, on=None, left_on=None, right_on=None):
     """Merge two DataFrames using explicit-comms.
 
     This is an explicit-comms version of Dask's Dataframe.merge() that
@@ -179,18 +179,6 @@ def dataframe_merge(left, right, on=None, left_on=None, right_on=None, preserve_
             "Some combination of the on, left_on, and right_on arguments must be set"
         )
 
-    if preserve_npartitions:
-        npartitions = max(left.npartitions, right.npartitions)
-        npartitions = npartitions / 
-        div, mod = divmod(npartitions, )
-            nsplits = [div] * df.npartitions
-            nsplits[-1] += mod
-
-    else:
-        npartitions_per_worker = 1
-
-
-
     return comms.default_comms().dataframe_operation(
-        _dataframe_merge, df_list=(left, right), extra_args=(left_on, right_on), npartitions_per_worker=npartitions_per_worker
+        _dataframe_merge, df_list=(left, right), extra_args=(left_on, right_on)
     )
