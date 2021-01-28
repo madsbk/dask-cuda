@@ -175,12 +175,18 @@ async def local_shuffle(
         futures.append(send(eps, rank_to_out_parts_list))
     await asyncio.gather(*futures)
 
+    # At this point `send()` should have pop'ed all output partitions
+    # beside the partitions owned be itself.
+    assert len(rank_to_out_parts_list) == 1
+
     ret = []
     for i in range(len(rank_to_out_part_ids[myrank])):
         dfs = []
         for out_parts in out_parts_list:
             dfs.extend(out_parts[i])
+            out_parts[i] = None
         dfs.extend(rank_to_out_parts_list[myrank][i])
+        rank_to_out_parts_list[myrank][i] = None
         if len(dfs) > 1:
             ret.append(_concat(dfs, ignore_index=ignore_index))
         else:
