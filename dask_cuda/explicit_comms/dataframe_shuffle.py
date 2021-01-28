@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from dask_cuda.proxify_host_file import ProxifyHostFileTemporaries
 from operator import getitem
 from typing import Dict, List, Optional, Set
 
@@ -24,15 +25,20 @@ async def send(eps, rank_to_out_parts_list: Dict[int, List[List[DataFrame]]]):
     await asyncio.gather(*futures)
 
 
+async def read(ep, tmps: ProxifyHostFileTemporaries):
+    data = nested_deserialize(await ep.read())
+    return [tmps.add(d) for d in data]
+
+
 async def recv(
-    eps, in_nparts: Dict[int, int], out_parts_list: List[List[List[DataFrame]]]
+    eps, in_nparts: Dict[int, int], out_parts_list: List[List[List[DataFrame]]], tmps: ProxifyHostFileTemporaries
 ):
     """Notice, received items are appended to `out_parts_list`"""
     futures = []
     for rank, ep in eps.items():
         if rank in in_nparts:
-            futures.append(ep.read())
-    out_parts_list.extend(nested_deserialize(await asyncio.gather(*futures)))
+            futures.append(read(ep, tmps))
+    out_parts_list.extend(await asyncio.gather(*futures))
 
 
 def partition_by_hash(
@@ -156,6 +162,8 @@ async def local_shuffle(
     myrank = s["rank"]
     eps = s["eps"]
     assert s["rank"] in workers
+    tmps = ProxifyHostFileTemporaries(in_parts[0])
+
 
     rank_to_out_parts_list = partition_by_hash(
         in_parts,
@@ -170,7 +178,7 @@ async def local_shuffle(
     out_parts_list: List[List[List[DataFrame]]] = []
     futures = []
     if myrank in rank_to_out_parts_list:
-        futures.append(recv(eps, in_nparts, out_parts_list))
+        futures.append(recv(eps, in_nparts, out_parts_list, tmps))
     if myrank in in_nparts:
         futures.append(send(eps, rank_to_out_parts_list))
     await asyncio.gather(*futures)
@@ -191,6 +199,8 @@ async def local_shuffle(
             ret.append(_concat(dfs, ignore_index=ignore_index))
         else:
             ret.append(dfs[0])
+        ret[-1] = tmps.add(ret[-1])
+    tmps.clear()
     return ret
 
 

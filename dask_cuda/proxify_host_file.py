@@ -3,12 +3,14 @@ import time
 import weakref
 from collections import defaultdict
 from typing import (
+    Any,
     DefaultDict,
     Dict,
     Hashable,
     Iterator,
     List,
     MutableMapping,
+    Optional,
     Set,
     Tuple,
 )
@@ -181,6 +183,20 @@ class ProxifyHostFile(MutableMapping):
                 total_dev_mem_usage += size
             return total_dev_mem_usage, dev_buf_access
 
+    def register_item(self, key, value):
+        with self.lock:
+            found_proxies = []
+            proxied_id_to_proxy = self.proxies_tally.get_proxied_id_to_proxy()
+            item = proxify_device_objects(value, proxied_id_to_proxy, found_proxies)
+            last_access = time.time()
+            self_weakref = weakref.ref(self)
+            for p in found_proxies:
+                p._obj_pxy["hostfile"] = self_weakref
+                p._obj_pxy["last_access"] = last_access
+            self.proxies_tally.add_key(key, found_proxies)
+            self.maybe_evict()
+            return item
+
     def __setitem__(self, key, value):
         with self.lock:
             if key in self.store:
@@ -204,9 +220,14 @@ class ProxifyHostFile(MutableMapping):
         with self.lock:
             return self.store[key]
 
-    def __delitem__(self, key):
+    def unregister_item(self, key):
         with self.lock:
-            del self.store[key]
+            self.proxies_tally.del_key(key)
+
+    def __delitem__(self, key, external_item=False):
+        with self.lock:
+            if not external_item:
+                del self.store[key]
             self.proxies_tally.del_key(key)
 
     def evict(self, proxy: ProxyObject):
@@ -230,3 +251,36 @@ class ProxifyHostFile(MutableMapping):
                     total_dev_mem_usage -= size
                     if total_dev_mem_usage <= self.device_memory_limit:
                         break
+
+
+class ProxifyHostFileTemporaries:
+    def __init__(self, proxy_object: Any, key: Optional[Hashable] = None):
+        self.key: Hashable = key or id(self)
+        self.obj_id_to_obj: Dict[int, Any] = {}
+        self.hostfile: Optional[ProxifyHostFile] = None
+        try:
+            self.hostfile = proxy_object._obj_pxy["hostfile"]()
+        except (AttributeError, KeyError):
+            pass
+
+    def add(self, obj):
+        if self.hostfile is None:
+            return obj
+        ret = self.hostfile.register_item(id(obj), obj)
+        assert hasattr(ret, "_obj_pxy")
+        self.obj_id_to_obj[id(obj)] = ret
+        return ret
+
+    def rm(self, obj):
+        if self.hostfile is None:
+            return obj
+        del self.obj_id_to_obj[id(obj)]
+        self.hostfile.__delitem__(self.key, external_item=True)
+
+    def clear(self):
+        for obj in self.obj_id_to_obj.values():
+            self.rm(obj)
+        self.obj_id_to_obj.clear()
+
+    def __del__(self):
+        self.clear()
