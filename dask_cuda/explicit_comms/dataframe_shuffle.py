@@ -310,10 +310,16 @@ def dataframe_shuffle(
 def rearrange_by_column_tasks_wrapper(
     df, column, max_branch=32, npartitions=None, ignore_index=False
 ):
+    """Function wrapper that dispatch the shuffle to explicit-comms.
+
+    Notice, this is monkey patched into Dask at dask_cuda import
+    """
+
     if dask.config.get("explicit-comms", False):
         try:
             import distributed.worker
 
+            # Make sure we have an activate client.
             distributed.worker.get_client()
         except (ImportError, ValueError):
             pass
