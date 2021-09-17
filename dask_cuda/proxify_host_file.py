@@ -167,7 +167,7 @@ class ProxyManager:
         return ret[:-1]  # Strip last newline
 
     def get_proxies_by_serializer(self, serializer: Optional[str]) -> Proxies:
-        if serializer in ("dask", "pickle"):
+        if serializer in ("to-pandas", "dask", "pickle"):
             return self._host
         else:
             return self._dev
@@ -260,7 +260,7 @@ class ProxyManager:
                 for _, size, proxies in dev_buf_access:
                     for p in proxies:
                         # Serialize to disk, which "dask" and "pickle" does
-                        p._obj_pxy_serialize(serializers=("dask", "pickle"))
+                        p._obj_pxy_serialize(serializers=("to-pandas", "dask", "pickle"))
                     total_dev_mem_usage -= size
                     if total_dev_mem_usage <= self._device_memory_limit:
                         break

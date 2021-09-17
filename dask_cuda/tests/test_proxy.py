@@ -200,7 +200,7 @@ def test_proxy_object_of_array(serializers, backend):
         assert all(expect == got)
 
 
-@pytest.mark.parametrize("serializers", [None, ["dask"]])
+@pytest.mark.parametrize("serializers", [None, ["dask"], ["to-pandas"]])
 def test_proxy_object_of_cudf(serializers):
     """Check that a proxied cudf dataframe behaves as a regular dataframe"""
     cudf = pytest.importorskip("cudf")
@@ -209,8 +209,8 @@ def test_proxy_object_of_cudf(serializers):
     assert_frame_equal(df.to_pandas(), pxy.to_pandas())
 
 
-@pytest.mark.parametrize("proxy_serializers", [None, ["dask"], ["cuda"]])
-@pytest.mark.parametrize("dask_serializers", [["dask"], ["cuda"]])
+@pytest.mark.parametrize("proxy_serializers", [None, ["dask"], ["cuda"], ["to-pandas"]])
+@pytest.mark.parametrize("dask_serializers", [["dask"], ["cuda"], ["to-pandas", "dask"]])
 def test_serialize_of_proxied_cudf(proxy_serializers, dask_serializers):
     """Check that we can serialize a proxied cudf dataframe, which might
     be serialized already.

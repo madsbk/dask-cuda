@@ -20,6 +20,7 @@ import dask.utils
 import distributed.protocol
 import distributed.utils
 from dask.sizeof import sizeof
+from distributed.protocol.serialize import register_serialization_family
 from distributed.worker import dumps_function, loads_function
 
 try:
@@ -694,6 +695,7 @@ def obj_pxy_is_device_object(obj: ProxyObject):
     """
     return obj._obj_pxy_is_cuda_object()
 
+timer = [0]
 
 @distributed.protocol.dask_serialize.register(ProxyObject)
 def obj_pxy_dask_serialize(obj: ProxyObject):
@@ -702,7 +704,15 @@ def obj_pxy_dask_serialize(obj: ProxyObject):
     ProxyObject. As serializers, it uses "dask" or "pickle", which means
     that proxied CUDA objects are spilled to main memory before communicated.
     """
+    from . import is_pandas_spilled
+    pd = is_pandas_spilled(obj)
+    t1=time.monotonic()
     header, frames = obj._obj_pxy_serialize(serializers=("dask", "pickle"))
+    timer[0] += time.monotonic() -t1
+    if pd:
+        print("obj_pxy_dask_serialize on pandas spilled: ", timer[0])
+
+
     meta = obj._obj_pxy_get_init_args(include_obj=False)
     return {"proxied-header": header, "obj-pxy-meta": meta}, frames
 
@@ -784,3 +794,28 @@ dask.dataframe.methods.concat_dispatch.register(
     (pandas.DataFrame, pandas.Series, pandas.Index),
     unproxify_input_wrapper(concat_pandas),
 )
+
+import cudf
+def to_pandas_dumps(x:cudf.DataFrame):
+    print("to_pandas_dumps()")
+    if isinstance(x, ProxyObject):
+        raise NotImplementedError()
+    try:
+        frames = [x.to_pandas()]
+    except BaseException as e:
+        print(f"to_pandas_dumps({type(x)}) - NotImplementedError({str(e)})")
+        raise NotImplementedError()
+
+    header = {"serialized-type": pickle.dumps(type(x))}
+    #print(f"to_pandas_dumps({type(x)}) - converting to {type(frames[0])}")
+    return header, frames
+
+
+def to_pandas_loads(header, frames):
+    typ = pickle.loads(header["serialized-type"])
+    #print(f"to_pandas_loads() - type: {typ}")
+    ret = typ(frames[0])
+    return ret
+
+
+register_serialization_family("to-pandas", to_pandas_dumps, to_pandas_loads)
