@@ -22,6 +22,8 @@ import dask.dataframe.core
 from .is_device_object import is_device_object
 from .proxy_object import ProxyObject
 
+no_value = "--no-value-sentinel--"
+
 
 class ProxyOperation:
     def __init__(
@@ -35,25 +37,23 @@ class ProxyOperation:
         self._pxy_func_args = func_args
         self._pxy_func_kwargs = func_kwargs
         self._pxy_output_type = output_type
-        self._pxy_output_value = None
-        self._pxy_done = False
+        self._pxy_output_value = no_value
 
     def _pxy_apply(self):
-        if self._pxy_done:
+        if self._pxy_output_value is no_value:
             assert self._pxy_func_args is None
             assert self._pxy_func_kwargs is None
         else:
             self._pxy_output_value = self._pxy_func(
                 self._pxy_func_args, **self._pxy_func_kwargs
             )
-            self._pxy_done = True
             self._pxy_func_args = None
             self._pxy_func_kwargs = None
         assert isinstance(self._pxy_output_value, self._pxy_output_type)
         return self._pxy_output_value
 
     def _pxy_map_reduce(self, map_func, reduce_func):
-        if self._pxy_done:
+        if self._pxy_output_value is no_value:
             return map_func(self._pxy_output_value)
         else:
             return reduce_func(map_func(p) for p in self._pxy_func_args)
@@ -74,7 +74,7 @@ class ProxyOperation:
         return str(self._pxy_apply())
 
     def __repr__(self):
-        if self._pxy_done:
+        if self._pxy_output_value is no_value:
             of = repr(self._pxy_output_type)
         else:
             of = repr(self._pxy_func_args)
@@ -305,14 +305,18 @@ def pxy_op_dask_serialize(obj: ProxyOperation, serializers=None):
     The generic serialization of ProxyOperation used by Dask when
     communicating ProxyOperation.
     """
-    if obj._pxy_done:
-        sub_header, sub_frames = distributed.protocol.serialize(obj._pxy_output_value, serializers=serializers)
+    if obj._pxy_output_value is no_value:
+        sub_header, sub_frames = distributed.protocol.serialize(
+            obj._pxy_output_value, serializers=serializers
+        )
         return {"done": True, "sub-header": sub_header}, sub_frames
 
     sub_headers = []
     frames = []
     for pxy in obj._pxy_func_args:
-        sub_header, sub_frames = distributed.protocol.serialize(pxy, serializers=serializers)
+        sub_header, sub_frames = distributed.protocol.serialize(
+            pxy, serializers=serializers
+        )
         sub_headers.append((len(frames), len(frames) + len(sub_frames), sub_header))
         frames.extend(sub_frames)
 
@@ -327,9 +331,11 @@ def pxy_op_dask_serialize(obj: ProxyOperation, serializers=None):
         frames,
     )
 
+
 @distributed.protocol.cuda.cuda_serialize.register(ProxyOperation)
 def pxy_op_cuda_serialize(obj: ProxyOperation):
     return pxy_op_dask_serialize(obj, serializers=("cuda",))
+
 
 @distributed.protocol.dask_deserialize.register(ProxyOperation)
 @distributed.protocol.cuda.cuda_deserialize.register(ProxyOperation)
