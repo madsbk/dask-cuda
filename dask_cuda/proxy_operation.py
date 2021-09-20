@@ -37,7 +37,6 @@ class ProxyOperation:
         self._pxy_output_type = output_type
         self._pxy_output_value = None
         self._pxy_done = False
-        self.__class__ = output_type
 
     def _pxy_apply(self):
         if self._pxy_done:
@@ -58,6 +57,10 @@ class ProxyOperation:
             return map_func(self._pxy_output_value)
         else:
             return reduce_func(map_func(p) for p in self._pxy_func_args)
+
+    @property
+    def __class__(self):
+        return self._pxy_output_type
 
     def __getattr__(self, name):
         return getattr(self._pxy_apply(), name)
