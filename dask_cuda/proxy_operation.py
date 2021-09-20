@@ -300,19 +300,19 @@ def pxy_op_is_device(obj: ProxyOperation):
 
 
 @distributed.protocol.dask_serialize.register(ProxyOperation)
-def pxy_op_dask_serialize(obj: ProxyOperation):
+def pxy_op_dask_serialize(obj: ProxyOperation, serializers=None):
     """
     The generic serialization of ProxyOperation used by Dask when
     communicating ProxyOperation.
     """
     if obj._pxy_done:
-        sub_header, sub_frames = distributed.protocol.serialize(obj._pxy_output_value)
+        sub_header, sub_frames = distributed.protocol.serialize(obj._pxy_output_value, serializers=serializers)
         return {"done": True, "sub-header": sub_header}, sub_frames
 
     sub_headers = []
     frames = []
     for pxy in obj._pxy_func_args:
-        sub_header, sub_frames = distributed.protocol.serialize(pxy)
+        sub_header, sub_frames = distributed.protocol.serialize(pxy, serializers=serializers)
         sub_headers.append((len(frames), len(frames) + len(sub_frames), sub_header))
         frames.extend(sub_frames)
 
@@ -327,8 +327,12 @@ def pxy_op_dask_serialize(obj: ProxyOperation):
         frames,
     )
 
+@distributed.protocol.cuda.cuda_serialize.register(ProxyOperation)
+def pxy_op_cuda_serialize(obj: ProxyOperation):
+    return pxy_op_dask_serialize(obj, serializers=("cuda",))
 
 @distributed.protocol.dask_deserialize.register(ProxyOperation)
+@distributed.protocol.cuda.cuda_deserialize.register(ProxyOperation)
 def pxy_op_dask_deserialize(header, frames):
     frames = list(frames)
     if header["done"]:
