@@ -8,6 +8,7 @@ import dask
 from dask.utils import Dispatch
 
 from .proxy_object import ProxyObject, asproxy
+from .proxy_operation import ProxyOperation
 
 dispatch = Dispatch(name="proxify_device_objects")
 ignore_types = None
@@ -183,7 +184,7 @@ def proxify_device_object_default(
 
 @dispatch.register(ProxyObject)
 def proxify_device_object_proxy_object(
-    obj, proxied_id_to_proxy, found_proxies, excl_proxies
+    obj: ProxyObject, proxied_id_to_proxy, found_proxies, excl_proxies
 ):
     # Check if `obj` is already known
     if not obj._obj_pxy_is_serialized():
@@ -196,6 +197,23 @@ def proxify_device_object_proxy_object(
     if not excl_proxies:
         found_proxies.append(obj)
     return obj
+
+
+@dispatch.register(ProxyOperation)
+def proxify_device_object_proxy_operation(
+    obj: ProxyOperation, proxied_id_to_proxy, found_proxies, excl_proxies
+):
+    if obj._pxy_done:
+        return dispatch(
+            obj._pxy_apply(), proxied_id_to_proxy, found_proxies, excl_proxies
+        )
+
+    return ProxyOperation(
+        obj._pxy_func,
+        dispatch(obj._pxy_func_args, proxied_id_to_proxy, found_proxies, excl_proxies),
+        obj._pxy_func_kwargs,
+        obj._pxy_output_type,
+    )
 
 
 @dispatch.register(list)
