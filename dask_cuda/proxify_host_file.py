@@ -139,6 +139,33 @@ class ProxiesOnDevice(Proxies):
                 self._mem_usage -= sizeof(dev_mem)
 
 
+class Statistics:
+    total_timings: DefaultDict[Tuple[Proxies, Proxies], float]
+
+    def __init__(self):
+        self.total_timings = defaultdict(float)
+
+    def add_total_time(self, src: Proxies, dst: Proxies, timing: Optional[float]):
+        if timing is not None:
+            self.total_timings[(src, dst)] += timing
+
+    def __str__(self) -> str:
+        ret = "Statistics: \n"
+        if self.total_timings:
+            ret += "  Total timings: \n"
+            total_timings: Dict[str, float] = {}
+            for (src, dst), timing in self.total_timings.items():
+                total_timings[f"{type(src).__name__}->{type(dst).__name__}"] = timing
+            max_str_len = max(len(s) for s in total_timings.keys())
+            for k, v in total_timings.items():
+                k += " " * (max_str_len - len(k))
+                ret += "    %s: %3.2fs\n" % (k, v)
+        return ret[:-1]  # Strip last newline
+
+
+def print_statistics(x:Statistics):
+    print(x)
+
 class ProxyManager:
     """
     This class together with Proxies, ProxiesOnHost, and ProxiesOnDevice
@@ -154,11 +181,13 @@ class ProxyManager:
 
     def __init__(self, device_memory_limit: int, memory_limit: int):
         self.lock = threading.RLock()
+        self.statistics = Statistics()
         self._disk = ProxiesOnDisk()
         self._host = ProxiesOnHost()
         self._dev = ProxiesOnDevice()
         self._device_memory_limit = device_memory_limit
         self._host_memory_limit = memory_limit
+        weakref.finalize(self, print_statistics, self.statistics)
 
     def __repr__(self) -> str:
         with self.lock:
@@ -227,6 +256,7 @@ class ProxyManager:
         proxy: ProxyObject,
         from_serializer: Optional[str],
         to_serializer: Optional[str],
+        timing: float = None,
     ) -> None:
         with self.lock:
             src = self.get_proxies_by_serializer(from_serializer)
@@ -234,6 +264,7 @@ class ProxyManager:
             if src is not dst:
                 src.remove(proxy)
                 dst.add(proxy)
+                self.statistics.add_total_time(src, dst, timing)
 
     def validate(self):
         with self.lock:

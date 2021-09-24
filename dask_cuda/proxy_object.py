@@ -147,7 +147,7 @@ class ProxyManagerDummy:
 
     This is a dummy class returned by `ProxyObject._obj_pxy_get_manager()`
     when no manager has been registered the proxy object. It implements
-    dummy methods that doesn't do anything it is purely for convenience.
+    dummy methods that doesn't do anything, it is purely for convenience.
     """
 
     def add(self, *args, **kwargs):
@@ -360,15 +360,19 @@ class ProxyObject:
 
             manager = self._obj_pxy_get_manager()
             with manager.lock:
+                t1 = time.monotonic()
                 header, _ = self._obj_pxy["obj"] = distributed.protocol.serialize(
                     self._obj_pxy["obj"], serializers, on_error="raise"
                 )
                 assert "is-collection" not in header  # Collections not allowed
                 org_ser, new_ser = self._obj_pxy["serializer"], header["serializer"]
                 self._obj_pxy["serializer"] = new_ser
+                t2 = time.monotonic()
 
                 # Tell the manager (if any) that this proxy has changed serializer
-                manager.move(self, from_serializer=org_ser, to_serializer=new_ser)
+                manager.move(
+                    self, from_serializer=org_ser, to_serializer=new_ser, timing=t2 - t1
+                )
 
                 # Invalidate the (possible) cached "device_memory_objects"
                 self._obj_pxy_cache.pop("device_memory_objects", None)
