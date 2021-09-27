@@ -361,6 +361,8 @@ class ProxyObject:
             manager = self._obj_pxy_get_manager()
             with manager.lock:
                 t1 = time.monotonic()
+                #import traceback
+                #traceback.print_stack()
                 header, _ = self._obj_pxy["obj"] = distributed.protocol.serialize(
                     self._obj_pxy["obj"], serializers, on_error="raise"
                 )
@@ -403,19 +405,27 @@ class ProxyObject:
                         and maybe_evict
                         and self._obj_pxy["serializer"] != "cuda"
                     ):
+                        t1 = time.monotonic()
                         manager.maybe_evict(self.__sizeof__())
+                        t2 = time.monotonic()
+                        if not isinstance(manager, ProxyManagerDummy):
+                            manager.statistics.add_other_time("deserialize-maybe-evict", t2-t1)
 
+
+                    t1 = time.monotonic()
                     # Deserialize the proxied object
                     header, frames = self._obj_pxy["obj"]
                     self._obj_pxy["obj"] = distributed.protocol.deserialize(
                         header, frames
                     )
+                    t2 = time.monotonic()
 
                     # Tell the manager (if any) that this proxy has changed serializer
                     manager.move(
                         self,
                         from_serializer=self._obj_pxy["serializer"],
                         to_serializer=None,
+                        timing=t2-t1
                     )
                     self._obj_pxy["serializer"] = None
 
@@ -763,8 +773,9 @@ def handle_disk_serialized(obj: ProxyObject):
 
     On a non-shared filesystem, we deserialize the proxy to host memory.
     """
-
+    t1 = time.monotonic()
     header, frames = obj._obj_pxy["obj"]
+    sf = header["shared-filesystem"]
     if header["shared-filesystem"]:
         old_path = header["path"]
         new_path = f"{old_path}-linked-{uuid.uuid4()}"
@@ -781,6 +792,10 @@ def handle_disk_serialized(obj: ProxyObject):
             frames = decompress(header["disk-sub-header"], frames)
         header = header["disk-sub-header"]
         obj._obj_pxy["serializer"] = header["serializer"]
+    t2 = time.monotonic()
+    manager = obj._obj_pxy_get_manager()
+    if not isinstance(manager, ProxyManagerDummy):
+        manager.statistics.add_other_time(f"handle_disk_serialized(shared-filesystem={sf})", t2-t1)
     return header, frames
 
 
@@ -792,10 +807,16 @@ def obj_pxy_dask_serialize(obj: ProxyObject):
     are spilled to main memory before communicated. Deserialization is needed, unless
     obj is serialized to disk on a shared filesystem see `handle_disk_serialized()`.
     """
+    t1 = time.monotonic()
     if obj._obj_pxy["serializer"] == "disk":
         header, frames = handle_disk_serialized(obj)
     else:
         header, frames = obj._obj_pxy_serialize(serializers=("dask", "pickle"))
+    t2 = time.monotonic()
+    manager = obj._obj_pxy_get_manager()
+    if not isinstance(manager, ProxyManagerDummy):
+        manager.statistics.add_other_time("obj_pxy_dask_serialize()", t2-t1)
+
     meta = obj._obj_pxy_get_init_args(include_obj=False)
     return {"proxied-header": header, "obj-pxy-meta": meta}, frames
 

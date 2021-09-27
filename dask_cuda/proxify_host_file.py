@@ -144,10 +144,24 @@ class Statistics:
 
     def __init__(self):
         self.total_timings = defaultdict(float)
+        self.other_timings = defaultdict(float)
+        self.last_print = time.monotonic()
+
+    def printing_tick(self, delay=10):
+        if self.last_print + delay < time.monotonic():
+            self.last_print = time.monotonic()
+            print(self)
 
     def add_total_time(self, src: Proxies, dst: Proxies, timing: Optional[float]):
         if timing is not None:
             self.total_timings[(src, dst)] += timing
+            self.printing_tick()
+
+
+    def add_other_time(self, name: str, timing: Optional[float]):
+        if timing is not None:
+            self.other_timings[name] += timing
+            self.printing_tick()
 
     def __str__(self) -> str:
         ret = "Statistics: \n"
@@ -156,10 +170,16 @@ class Statistics:
             total_timings: Dict[str, float] = {}
             for (src, dst), timing in self.total_timings.items():
                 total_timings[f"{type(src).__name__}->{type(dst).__name__}"] = timing
-            max_str_len = max(len(s) for s in total_timings.keys())
+            max_str_len = max(len(s) for s in total_timings.keys()) + 3
             for k, v in total_timings.items():
-                k += " " * (max_str_len - len(k))
-                ret += "    %s: %3.2fs\n" % (k, v)
+                k += "." * (max_str_len - len(k))
+                ret += "    %s: %6.2fs\n" % (k, v)
+        if self.other_timings:
+            ret += "  Other timings: \n"
+            max_str_len = max(len(s) for s in self.other_timings.keys()) + 3
+            for k, v in self.other_timings.items():
+                k += "." * (max_str_len - len(k))
+                ret += "    %s: %6.2fs\n" % (k, v)
         return ret[:-1]  # Strip last newline
 
 
@@ -294,7 +314,10 @@ class ProxyManager:
                 if not self.contains(id(p)):
                     p._obj_pxy_register_manager(self)
                     self.add(p)
+            t1 = time.monotonic()
             self.maybe_evict()
+            t2 = time.monotonic()
+            self.statistics.add_other_time("proxify-maybe-evict", t2-t1)
             return ret
 
     def get_dev_buffer_to_proxies(self) -> DefaultDict[Hashable, List[ProxyObject]]:
@@ -368,17 +391,26 @@ class ProxyManager:
                         break
 
     def force_evict_from_host(self) -> int:
-        with self.lock:
-            _, info = self.get_host_access_info()
-            info.sort(key=lambda x: (x[0], -x[1]))
-            for _, size, proxy in info:
-                ProxifyHostFile.serialize_proxy_to_disk_inplace(proxy)
-                return size
-            return 0
+        t1 = time.monotonic()
+        try:
+            with self.lock:
+                _, info = self.get_host_access_info()
+                info.sort(key=lambda x: (x[0], -x[1]))
+                for _, size, proxy in info:
+                    ProxifyHostFile.serialize_proxy_to_disk_inplace(proxy)
+                    return size
+                return 0
+        finally:
+            t2 = time.monotonic()
+            self.statistics.add_other_time("force_evict_from_host()", t2-t1)
+
 
     def maybe_evict(self, extra_dev_mem=0) -> None:
+        t1 = time.monotonic()
         self.maybe_evict_from_device(extra_dev_mem)
         self.maybe_evict_from_host()
+        t2 = time.monotonic()
+        self.statistics.add_other_time("maybe_evict()", t2-t1)
 
 
 class ProxifyHostFile(MutableMapping):
@@ -493,6 +525,7 @@ class ProxifyHostFile(MutableMapping):
         with self.lock:
             ret = self.store[key]
         if self.compatibility_mode:
+            print("compatibility_mode"*1000)
             ret = unproxify_device_objects(ret, skip_explicit_proxies=True)
             self.manager.maybe_evict()
         return ret
@@ -608,6 +641,7 @@ class ProxifyHostFile(MutableMapping):
             else:
                 header, frames = proxy._obj_pxy["obj"]
                 if header["serializer"] in ("dask", "pickle"):
+                    t1 = time.monotonic()
                     path = cls.gen_file_path()
                     with open(path, "wb") as f:
                         f.write(pack_frames(frames))
@@ -620,12 +654,15 @@ class ProxifyHostFile(MutableMapping):
                         },
                         [],
                     )
+                    t2 = time.monotonic()
                     proxy._obj_pxy["serializer"] = "disk"
                     manager.move(
                         proxy,
                         from_serializer=header["serializer"],
                         to_serializer="disk",
+                        timing=t2-t1,
                     )
                 elif header["serializer"] != "disk":
+                    print("WTF!"*1000)
                     proxy._obj_pxy_deserialize()
                     proxy._obj_pxy_serialize(serializers=("disk",))
