@@ -319,8 +319,8 @@ def shuffle(
     for rank, i in zip(ranks, range(div * len(ranks), npartitions)):
         rank_to_out_part_ids[rank].add(i)
 
-    print("in :        ", [len(inkeys) for inkeys in rank_to_inkeys.values()])
-    print("out: ", [len(out_part_ids) for out_part_ids in rank_to_out_part_ids.values()])
+    print("input:  ", [len(inkeys) for inkeys in rank_to_inkeys.values()])
+    print("output: ", [len(out_part_ids) for out_part_ids in rank_to_out_part_ids.values()])
 
     # Run `_shuffle()` on each worker
     shuffle_result = {}
