@@ -282,6 +282,7 @@ def shuffle(
       (c) Submit a dask graph that extract (using `getitem()`) individual
           dataframe-partitions from (b).
     """
+    print("\nshuffle()")
     t0 = time.time()
     c = comms.default_comms()
 
@@ -308,7 +309,7 @@ def shuffle(
     rank_to_inkeys = c.stage_keys(name=name, keys=df.__dask_keys__())
     c.client.cancel(df)  # Notice, since `df` has been staged, nothing is freed here.
     t2 = time.time()
-    print("cancel: ", t2-t1)
+    print("cancel:   ", t2-t1)
 
     # Find the output partition IDs for each worker
     div = npartitions // len(ranks)
@@ -318,7 +319,8 @@ def shuffle(
     for rank, i in zip(ranks, range(div * len(ranks), npartitions)):
         rank_to_out_part_ids[rank].add(i)
 
-    print(f"rank_to_out_part_ids: ", [len(out_part_ids) for out_part_ids in rank_to_out_part_ids.values()])
+    print("in :        ", [len(inkeys) for inkeys in rank_to_inkeys.values()])
+    print("out: ", [len(out_part_ids) for out_part_ids in rank_to_out_part_ids.values()])
 
     # Run `_shuffle()` on each worker
     shuffle_result = {}
