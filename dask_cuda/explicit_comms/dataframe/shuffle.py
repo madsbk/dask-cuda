@@ -20,6 +20,8 @@ from distributed.protocol import nested_deserialize, to_serialize
 from .. import comms
 
 
+import time
+
 async def send(
     eps,
     myrank,
@@ -280,6 +282,7 @@ def shuffle(
       (c) Submit a dask graph that extract (using `getitem()`) individual
           dataframe-partitions from (b).
     """
+    t0 = time.time()
     c = comms.default_comms()
 
     # The ranks of the output workers
@@ -297,11 +300,15 @@ def shuffle(
         f"{tokenize(df, column_names, npartitions, ignore_index)}"
     )
     df_meta: DataFrame = df._meta
+    t1 = time.time()
+    print("step (a): ", t1-t0)
 
     # Stage all keys of `df` on the workers and cancel them, which makes it possible
     # for the shuffle to free memory as the partitions of `df` are consumed.
     rank_to_inkeys = c.stage_keys(name=name, keys=df.__dask_keys__())
     c.client.cancel(df)  # Notice, since `df` has been staged, nothing is freed here.
+    t2 = time.time()
+    print("cancel: ", t2-t1)
 
     # Find the output partition IDs for each worker
     div = npartitions // len(ranks)
@@ -310,6 +317,8 @@ def shuffle(
         rank_to_out_part_ids[rank] = set(range(div * i, div * (i + 1)))
     for rank, i in zip(ranks, range(div * len(ranks), npartitions)):
         rank_to_out_part_ids[rank].add(i)
+
+    print(f"rank_to_out_part_ids: ", [len(out_part_ids) for out_part_ids in rank_to_out_part_ids.values()])
 
     # Run `_shuffle()` on each worker
     shuffle_result = {}
@@ -326,6 +335,8 @@ def shuffle(
             ignore_index,
         )
     wait(list(shuffle_result.values()))
+    t3 = time.time()
+    print("step (b): ", t3-t2)
 
     # Step (d): extract individual dataframe-partitions. We use `submit()`
     #           to control where the tasks are executed.
@@ -343,6 +354,9 @@ def shuffle(
     divs = [None] * (len(dsk) + 1)
     ret = new_dd_object(dsk, name, df_meta, divs).persist()
     wait(ret)
+    t4 = time.time()
+    print("step (c): ", t4-t3)
+
 
     # Release all temporary dataframes
     for fut in [*shuffle_result.values(), *dsk.values()]:
