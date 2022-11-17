@@ -14,7 +14,7 @@ import dask.dataframe
 from dask.base import tokenize
 from dask.dataframe.core import DataFrame, Series, _concat as dd_concat, new_dd_object
 from dask.dataframe.shuffle import group_split_dispatch, hash_object_dispatch
-from distributed import wait
+from distributed import get_worker, wait
 from distributed.protocol import nested_deserialize, to_serialize
 
 from .. import comms
@@ -237,6 +237,12 @@ async def shuffle_task(
     return ret
 
 
+def get_worker_keys():
+    data = get_worker().data
+    ret =  list(data.keys())
+    return ret
+
+
 def shuffle(
     df: DataFrame,
     column_names: str | List[str],
@@ -302,14 +308,12 @@ def shuffle(
     )
     df_meta: DataFrame = df._meta
     t1 = time.time()
-    print("step (a): ", t1-t0)
 
     # Stage all keys of `df` on the workers and cancel them, which makes it possible
     # for the shuffle to free memory as the partitions of `df` are consumed.
     rank_to_inkeys = c.stage_keys(name=name, keys=df.__dask_keys__())
     c.client.cancel(df)  # Notice, since `df` has been staged, nothing is freed here.
     t2 = time.time()
-    print("cancel:   ", t2-t1)
 
     # Find the output partition IDs for each worker
     div = npartitions // len(ranks)
@@ -321,6 +325,9 @@ def shuffle(
 
     print("input:  ", [len(inkeys) for inkeys in rank_to_inkeys.values()])
     print("output: ", [len(out_part_ids) for out_part_ids in rank_to_out_part_ids.values()])
+    print("step (a): ", t1-t0)
+    print("cancel:   ", t2-t1)
+    print("worker keys: ", c.client.submit(get_worker_keys).result())
 
     # Run `_shuffle()` on each worker
     shuffle_result = {}
@@ -339,6 +346,7 @@ def shuffle(
     wait(list(shuffle_result.values()))
     t3 = time.time()
     print("step (b): ", t3-t2)
+    print("worker keys: ", c.client.submit(get_worker_keys).result())
 
     # Step (d): extract individual dataframe-partitions. We use `submit()`
     #           to control where the tasks are executed.
@@ -359,13 +367,12 @@ def shuffle(
     t4 = time.time()
     print("step (c): ", t4-t3)
 
-
     # Release all temporary dataframes
     for fut in [*shuffle_result.values(), *dsk.values()]:
         fut.release()
 
-    t4 = time.time()
-    print("total: ", t5-t0)
+    t5 = time.time()
+    print("total:    ", t5-t0)
     return ret
 
 
