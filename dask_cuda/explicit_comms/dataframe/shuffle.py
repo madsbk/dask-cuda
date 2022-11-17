@@ -363,6 +363,9 @@ def shuffle(
     # Release all temporary dataframes
     for fut in [*shuffle_result.values(), *dsk.values()]:
         fut.release()
+
+    t4 = time.time()
+    print("total: ", t5-t0)
     return ret
 
 
