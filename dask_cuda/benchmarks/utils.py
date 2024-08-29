@@ -18,6 +18,7 @@ from distributed.comm.addressing import get_address_host
 
 from dask_cuda.local_cuda_cluster import LocalCUDACluster
 from dask_cuda.utils import parse_device_memory_limit
+from dask_cuda.uvm_cuda_cluster import UvmCUDACluster
 
 
 def as_noop(dsk):
@@ -79,7 +80,7 @@ def parse_benchmark_args(
     cluster_args.add_argument(
         "-p",
         "--protocol",
-        choices=["tcp", "ucx", "ucxx"],
+        choices=["tcp", "ucx", "ucxx", "inproc"],
         default="tcp",
         type=str,
         help="The communication protocol to use.",
@@ -276,6 +277,12 @@ def parse_benchmark_args(
         "Requires the ``asyncssh`` module to be installed.",
     )
     cluster_args.add_argument(
+        "--uvm-cluster",
+        action="store_true",
+        dest="uvm_cluster",
+        help="",
+    )
+    cluster_args.add_argument(
         "--hosts",
         default=None,
         type=str,
@@ -349,6 +356,11 @@ def parse_benchmark_args(
     if args.multi_node and len(args.hosts.split(",")) < 2:
         raise ValueError("--multi-node requires at least 2 hosts")
 
+    if args.uvm_cluster:
+        assert args.multi_node is False
+        args.protocol = "inproc"
+        args.disable_rmm = True
+
     # Raise error early if "explicit-comms" is not allowed
     if (
         check_explicit_comms
@@ -399,6 +411,14 @@ def get_cluster_options(args):
             },
             # "n_workers": len(args.devs.split(",")),
             # "CUDA_VISIBLE_DEVICES": args.devs,
+        }
+    elif args.uvm_cluster is True:
+        Cluster = UvmCUDACluster
+        scheduler_addr = None
+        cluster_args = []
+        cluster_kwargs = {
+            "n_workers": len(args.devs.split(",")),
+            "CUDA_VISIBLE_DEVICES": args.devs,
         }
     else:
         Cluster = LocalCUDACluster
